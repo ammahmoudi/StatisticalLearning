@@ -1,0 +1,265 @@
+---
+title: "US Diabetes Prediction"
+author: "Amirhossein Mamhoudi"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+<font face="B Yekan">
+
+::: {dir="auto"}
+## کتابخانه ها
+
+اضافه کردن کتابخانه ها و تنظیم زبان فارسی
+:::
+
+```{r}
+Sys.setlocale(locale = 'persian')
+library(data.table)
+library(ggplot2)
+library(patchwork)
+library(imager)
+library(lemon)
+library(caTools)
+library(ROCR) 
+library(randomForest)
+library(caret)
+library(gmodels)
+library(corrplot)
+
+```
+
+::: {dir="auto"}
+## خواندن داده ها
+:::
+
+```{r}
+d = fread('diabetes_binary_5050split_health_indicators_BRFSS2015.csv')
+d$Diabetes_binary = as.factor(d$Diabetes_binary)
+head(d)
+```
+
+::: {dir="auto"}
+## 1.آیا نتایج نظرسنجی BRFSS شانسی برای اینکه پیش‌بینی قابل قبولی از اینکه یک فرد دیابت دارد یا نه، ارائه ‌کند دارد؟ (یک بررسی توصیفی کفایت می‌کند، نیازی به مدلسازی نیست)
+
+بله.برای مثال ارتباط چند متفیر را بین افراد بیمار و سالم بررسی می کنیم.مثلا افراد با سن بالا بیشتر بیمار بودند. افراد با شاخص سلامتی فیزیکی بالا و افرادی که دارای تحرک فیزیکی بودند به وضوح کم تر بیمار شدند. همه این ها نشان می دهد که می توان رابطه ای بین این مغیر ها و بیار بودن یک شخص یپدا کرد.
+:::
+
+```{r}
+ggplot(d, aes(Age, group = Diabetes_binary, color = Diabetes_binary))+
+  geom_boxplot(alpha = .5)
+
+```
+
+```{r}
+ggplot(d, aes(PhysHlth, group = Diabetes_binary, fill = Diabetes_binary))+
+  geom_histogram(alpha = .5)
+```
+
+```{r}
+ggplot(d, aes(PhysActivity, group = Diabetes_binary, fill = Diabetes_binary))+
+  geom_bar(alpha = .5)
+```
+
+::: {dir="auto"}
+## 2.کدام عوامل خطر بیشترین قدرت پیش‌بینی ابتلا به دیابت را دارند؟
+
+برای این کار از مدل random forest استفاده می کنیم: ابتدا داده را به سه بخش val, train ,test تقسیم می کنیم:
+:::
+
+```{r}
+# Splitting data in trainval and test data with ration 0.7
+split <- sample.split(d$Diabetes_binary, SplitRatio = 0.7)
+train_val <- subset(d, split == "TRUE")
+test <- subset(d, split == "FALSE")
+#split trainval to train and val with ration 0.85
+val_split <- sample.split(train_val$Diabetes_binary, SplitRatio = 0.85)
+
+val <- subset(train_val, val_split == "FALSE")
+train <- subset(train_val, val_split == "TRUE")
+
+```
+
+::: {dir="auto"}
+حال مدل خود را می سازیم و آموزش می دهیم.
+:::
+
+```{r}
+# Fitting Random Forest to the train dataset
+set.seed(120)  # Setting seed
+
+rf = randomForest(x = train[,-1], y = train$Diabetes_binary, ntree = 500)
+
+rf
+
+```
+
+```{r}
+
+# Predicting the Test set results
+y_pred <- predict(rf, newdata = val[,-1])
+y_val<-as.factor(val$Diabetes_binary)
+
+```
+
+```{r}
+#y_pred<-data.table("Diabetes_binary"=y_pred)
+# Confusion Matrix
+confusion_mtx <- confusionMatrix(data=y_pred, reference =y_val)
+confusion_mtx
+
+```
+
+```{r}
+
+
+# Plotting model
+plot(rf)
+
+
+```
+
+```{r}
+
+# Importance plot
+rf_importance=importance(rf,Categorical=TRUE)
+rf_importance
+```
+
+```{r}
+
+# Variable importance plot
+varImpPlot(rf,sort=TRUE,main='Random forest Feature importance')
+```
+
+::: {dir="auto"}
+به ترتیب مهم ترین متغیر ها مشخص هستند.برای مثال شاخص BMI و سلامت کلی و سن از مهم ترین متغیر ها هستند.
+
+## 3.آیا می‌توانیم از زیرمجموعه‌ای از عوامل خطر برای پیش‌بینی اینکه یک فرد دیابت دارد یا نه، استفاده کنیم؟ به عبارت دیگر آیا می توانیم تنها از تعدادی از متغیرها در مدل استفاده کنیم و از بقیه صرف نظر کنیم؟ با چه روشی مدل نهایی را انتخاب می‌کنید؟
+
+بله ممکن است.ما برای مثال 6 متغیر مهم را انتخاب می کنیم و با چند مدل مختلف بررسی میکنیم
+:::
+
+```{r}
+
+# Logistics Regression
+glm_model <- glm(Diabetes_binary ~ BMI+GenHlth+Age+HighBP+Income+PhysHlth, data = train,family = binomial )
+
+summary(glm_model)
+
+
+```
+
+```{r}
+glm_probs <- predict(glm_model, type = "response")
+
+# Changing probabilities
+glm_pred <- ifelse(glm_probs >0.5, 1, 0)
+table ( glm_pred , train$Diabetes_binary )
+
+mean(glm_pred ==train$Diabetes_binary )
+
+
+print(c("accuracy of train data: ",mean(glm_pred ==train$Diabetes_binary )))
+```
+
+```{r}
+glm_probs <- predict(glm_model,newdata=val[,c("BMI","GenHlth","Age","HighBP","Income","PhysHlth")], type = "response")
+
+# Changing probabilities
+glm_pred <- ifelse(glm_probs >0.5, 1, 0)
+table ( glm_pred , val$Diabetes_binary )
+
+mean(glm_pred ==val$Diabetes_binary )
+
+
+print(c("accuracy of val data: ",mean(glm_pred ==val$Diabetes_binary )))
+```
+
+```{r}
+missing_classerr <- mean(glm_pred != val$Diabetes_binary)
+print(paste('Accuracy =', 1 - missing_classerr))
+   
+# ROC-AUC Curve
+ROCPred <- prediction(glm_pred, val$Diabetes_binary) 
+ROCPer <- performance(ROCPred, measure = "tpr", 
+                             x.measure = "fpr")
+   
+auc <- performance(ROCPred, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
+   
+# Plotting curve
+plot(ROCPer)
+plot(ROCPer, colorize = TRUE, 
+     print.cutoffs.at = seq(0.1, by = 0.1), 
+     main = "ROC CURVE")
+abline(a = 0, b = 1)
+   
+auc <- round(auc, 4)
+legend(.6, .4, auc, title = "AUC", cex = 1)
+```
+
+```{r}
+
+rf_model = randomForest(Diabetes_binary ~ BMI+GenHlth+Age+HighBP+Income+PhysHlth, data = train, ntree = 500)
+
+rf_model
+
+```
+
+```{r}
+
+# Predicting the Test set results
+rf_pred <- predict(rf_model, newdata = val[,c("BMI","GenHlth","Age","HighBP","Income","PhysHlth")])
+
+```
+
+```{r}
+#y_pred<-data.table("Diabetes_binary"=y_pred)
+# Confusion Matrix
+confusion_mtx <- confusionMatrix(data=rf_pred, reference =y_val)
+confusion_mtx
+
+```
+
+```{r}
+
+
+# Plotting model
+plot(rf_model)
+
+
+```
+
+::: {dir="auto"}
+می توانستیم مدل های بیشتری را هم بررسی کنیم اما تقریبا نتایح مشابه خواهند بود.در این جا هم تقریبا دقت ها مثل هم هستند.ما برای اینکه روش لاجستیک کمی بهتر قابل تحلیل است از آن به عنوان مدل نهایی استفاده می کنیم.
+
+## 4.کدام متغیرها در مدل نهایی شما نقش بازی می‌کنند و عملکرد مدل پیش‌بینی با استفاده از آن‌ها چگونه است؟ استراتژی شما برای استفاده از داده‌ train و validation و test در ساخت مدل و گزارش عملکرد آن چیست؟
+
+مدل نهایی ما رگرسیون موضعی بود که با شش متغیر "BMI","GenHlth","Age","HighBP","Income","PhysHlth" آموزش داده شده بود .نتیجه نهایی به شکل زیر خواهد بود.
+:::
+
+```{r}
+
+# Calculate the correlation matrix
+cor_mat <- cor(data.frame(train[,c("BMI","GenHlth","Age","HighBP","Income","PhysHlth"), with = FALSE]))
+
+# Plot the correlation heatmap
+corrplot(cor_mat, method = "color", type = "lower", addCoef.col = "black")
+
+
+summary(glm_model)
+```
+
+\<
+
+::: {dir="auto"}
+> می بنیم که تاثیر فشارخون بالا و شاخص BMI بیش از بقیه بوده و همچین متغیر درآمد تاثیر منفی داشته است که معقول به نظر می رسد.با کم تلاش می توان متغیر سلامت جسمی را با متغیر های بهتری جایگزین کرد.
+
+برای تقسیم داده های برای آموزش و تست اما داده ها را به سه بخش تقسیم میکنیم .بخش تست را کلا کنار می گذاریم تا در آخر آخر کار که خیلی نیاز است از آن استفاده کنیم.قبل از آن نباید از تست استفاده کرد تا داده ای برای یک روز مبادا یا حتی هیوقت! داشته باشیم.بخش دیگر راب به ترین و ولدیشین تقسیم میکنیم و کارمان را با آن انجام می دهیم.
+
+## آیا می‌توانیم برای ایجاد یک سامانه ارائه احتمال ابتلا به دیابت با انتخاب هوشمندانه ویژگی‌ها شکل کوتاه‌تری از پرسش‌ها ایجاد کنیم و تنها پرسیدن چند سوال با دقت قابل قبول پیش‌بینی کنیم که آیا شخصی ممکن است دیابت داشته باشد یا در خطر بالای دیابت باشد؟ در نظر داشته باشید می‌خواهیم در این سامانه همه محاسبات سمت کاربر (در مرورگر) انجام شود و چیزی سمت سرور فرستاده نشود، چون در این صورت سامانه قابلیت پیاده‌سازی نخواهد داشت. برای پاسخ به این سوال کافیست مدل از منظر خواسته شده تحلیل کنید. نیازی به انجام محاسبه نیست.
+
+بله مثلا با همین روش رگرسیون موضعی می توان به صادگی و فقط با داشتن یک تابع و ضرایب محاسبات را انجام داد.حتی بدون سمت سرور. روش درخت تصمیم نیز می توانست خیلی ساده و خوب کار را انجام دهد هرچند شاید دقت خوبی نمیداد!
+:::
