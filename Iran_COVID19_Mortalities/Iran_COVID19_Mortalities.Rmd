@@ -1,0 +1,168 @@
+---
+title: "Iran Provinces COVID-19 Extra Moratility Effect"
+author: "Amirhossein Mamhoudi"
+date: "`r Sys.Date()`"
+output: html_document
+---
+<font face="B Yekan">
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+<div dir="auto" >
+## کتابخانه ها
+اضافه کردن کتابخانه ها و تنظیم زبان فارسی
+
+</div>
+```{r}
+Sys.setlocale(locale = 'persian')
+
+library(data.table)
+library(ggplot2)
+library(knitr)
+library(rmarkdown)
+library(patchwork)
+```
+<div dir="auto" >
+## خوادن اطلاعات و تعریف متفیر ها
+
+داده های استفاده شده جهت فیت مربوط به 5 سال آخر قبل از کرونا خواهند بو
+</div>
+```{r}
+d = fread('iranprovs_mortality_monthly.csv', encoding = 'UTF-8')
+
+d$ym_num = d$y + d$m / 12 - 1/24
+
+###################
+
+ds = d[, .(n = sum(n)), .(y, m, ym_num, prov)]
+
+
+Provinces = unique(ds$prov)
+Years = unique(ds$y)
+
+
+
+ym_num_covid = 1398 + 10/12 - 1/24
+
+# to avoid dealing with non-linear patterns we only look at the last 5 years
+ym_num_start = ym_num_covid - 5
+
+dsm = ds[ym_num > ym_num_start]
+
+dsm = dsm[ym_num < ym_num_covid]
+
+```
+<div dir="auto" >
+
+## مدل برای داده های هر استان و ماه
+اکثر مدل ها مقدا پی زیادی داری اند و خط مربوط به آن ها تقریبا معادل خط افقی است ازین رو می توان آن ها را با میانگین جایگزین کرد اما این خط افقی نیز تقریبا کار همان میانگین را می کند و تاثیر جندانی ندارد.
+</div>
+```{r}
+
+
+for (p in Provinces) {
+  for (M in 1:12) {
+    dsm2fit = dsm[prov == p & m == M]
+    dspm = ds[prov == p & m == M]
+    fit = lm(n ~ ym_num, dsm2fit)
+    pr = predict(fit , dspm)
+    s = summary(fit)$sigma
+    
+    ds[prov == p & m == M, n_pred := pr]
+    ds[prov == p & m == M, margin := pr + 2 * s]
+    ds[, n_extra := n - n_pred]
+    ds[n < margin, n_extra := 0]
+    ds[prov == p &
+         m == M, n_extra_normalized := n_extra / sum(dspm[ym_num > ym_num_start]$n)]
+    
+    if(M==1){
+      px<-ggplot(ds[ prov == p & m == M])+
+        geom_smooth(aes(ym_num, n_pred), method = 'lm')+
+        geom_point(aes(ym_num, n), size = 3)+
+        scale_x_continuous(breaks = 1389:1401)+
+        geom_vline(xintercept = 1398 + 10/12 -1/24, linetype = 'dashed')+
+        ggtitle(label =p , subtitle = paste('month: ', M))
+    }
+    else{
+      px=px +
+        ggplot(ds[ prov == p & m == M])+
+        geom_smooth(aes(ym_num, n_pred), method = 'lm')+
+        geom_point(aes(ym_num, n), size = 3)+
+        scale_x_continuous(breaks = 1389:1401)+
+        geom_vline(xintercept = 1398 + 10/12 -1/24, linetype = 'dashed')+
+        ggtitle(label =p , subtitle = paste('month: ', M))
+     
+    }
+ 
+  }
+    ggsave(paste(p,".png"),width=20,height=15)
+
+  
+}
+ds_after = ds[ym_num > ym_num_covid]
+ds_after_only_extra = ds_after[n_extra > 0]
+paged_table(ds_after_only_extra[order(ds_after_only_extra$n_extra_normalized , decreasing = TRUE)])
+```
+<div dir="auto" >
+## نقشه حرارتی فوت اضافه برای هر استان در ماه های مختلف
+</div>
+```{r}
+ggplot(ds_after, aes(x = ym_num,
+                     y = reorder(prov,n_extra_normalized),
+                     fill = n_extra_normalized))+geom_tile()+scale_fill_distiller(palette = "Spectral")
+ggsave(
+  'heatmap.png',
+  plot = last_plot(),
+  device = NULL,
+  path = NULL,
+  scale = 1,
+  width = NA,
+  height = NA,
+  units = c("in", "cm", "mm", "px"),
+  dpi = 300,
+  limitsize = TRUE,
+  bg = NULL,
+  
+)
+```
+
+<div dir="auto" >
+## ذخیره جدول خروجی داده ها 
+</div>
+
+```{r}
+con<-file('data_after.csv',encoding="UTF-8")
+write.csv(ds_after,file=con)
+```
+<div dir="auto" >
+## محاسبه تعداد فوت اضافه  به ازای هر استان
+</div>
+```{r}
+ds_after_by_prov = ds_after[, .(n_extra_total = sum(n_extra),n_total=sum(n)), .( prov)]
+ds_after_by_prov$normal_n_extra_total= ds_after_by_prov$n_extra_total/(ds_after_by_prov$n_total)
+
+kable(ds_after_by_prov,caption="فوت اضافه بر حسب استان")
+```
+<div dir="auto" >
+## تعداد فوت اضافه در کل کشور
+</div>
+```{r}
+total=sum(ds_after$n_extra)
+print(total)
+```
+<div dir="auto" >
+## عملکرد استان ها
+برای این کار معیار های زیادی می توان گرفت .ما یک معیار ساده را بررسی می کنیم و آن نسبت تعداد فوت اضافه استان ها در این سال های کرونایی به نسبت کل قوت های آن هاست.
+طبق این نسبت استان سیستان بلوچستان بهترین عملکرد را داشته است.
+</div>
+```{r}
+ds_after_by_prov_sorted <- ds_after_by_prov[order(normal_n_extra_total),]
+kable(ds_after_by_prov_sorted,caption="فوت اضافه بر حسب استان")
+```
+
+</font>
+
+
+
+
